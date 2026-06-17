@@ -1386,7 +1386,8 @@ async function deleteLedgerFromCloud(cloudId){
 
 async function loadPackCatsFromCloud(){
   try{
-    const rows=await sbFetch('/rest/v1/trip_pack_cats?id=eq.'+TRIP_ID+'&select=data');
+    // 加 updated_at 確保拿最新，不被快取
+    const rows=await sbFetch('/rest/v1/trip_pack_cats?id=eq.'+TRIP_ID+'&select=data,updated_at&order=updated_at.desc');
     if(rows && rows.length>0){
       const cloudData = rows[0].data;
       // 雲端資料優先（覆蓋本地）
@@ -1409,8 +1410,6 @@ async function pushPackCatsToCloud(){
       prefer:'resolution=merge-duplicates',
       body:JSON.stringify({id:TRIP_ID,data:PACK_CATS,updated_at:new Date().toISOString()})
     });
-    // 清除本地快取，確保前台下次重新從雲端讀取
-    localStorage.removeItem('busanPackCats');
     console.log('✅ 打包分類已推送到雲端');
   } catch(e){
     console.error('打包分類推送失敗',e.message);
@@ -3975,7 +3974,8 @@ function savePersist(){
   if(isAdmin){localStorage.setItem('busanLedgerTest',JSON.stringify(testLedgerItems));}else{localStorage.setItem('busanLedger',JSON.stringify(ledgerItems));}
   localStorage.setItem('busanPersons',JSON.stringify(persons));
   localStorage.setItem('busanPack3',JSON.stringify(packState));
-  localStorage.setItem('busanPackCats',JSON.stringify(PACK_CATS));
+  // 後台不存 PACK_CATS 到 localStorage（雲端為主，避免快取衝突）
+  if(!isAdmin) localStorage.setItem('busanPackCats',JSON.stringify(PACK_CATS));
 }
 
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600);}
