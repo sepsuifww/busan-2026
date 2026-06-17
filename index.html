@@ -1327,6 +1327,10 @@ async function loadScheduleFromCloud(){
     const rows=await sbFetch('/rest/v1/trip_schedule?id=eq.'+TRIP_ID+'&select=data');
     if(rows && rows.length>0){
       scheduleData=rows[0].data;
+      // 載入後對每天的景點依時間排序
+      scheduleData.forEach(d=>{
+        d.items.sort((a,b)=>(a.time||'99:99').localeCompare(b.time||'99:99'));
+      });
       localStorage.setItem('busanSched',JSON.stringify(scheduleData));
       rebuildDaysMeta();
       renderDays();_renderSched();renderMap();
@@ -1405,7 +1409,13 @@ async function pushPackCatsToCloud(){
       prefer:'resolution=merge-duplicates',
       body:JSON.stringify({id:TRIP_ID,data:PACK_CATS,updated_at:new Date().toISOString()})
     });
-  } catch(e){ console.warn('打包分類推送失敗',e.message); }
+    // 清除本地快取，確保前台下次重新從雲端讀取
+    localStorage.removeItem('busanPackCats');
+    console.log('✅ 打包分類已推送到雲端');
+  } catch(e){
+    console.error('打包分類推送失敗',e.message);
+    toast('⚠️ 打包同步失敗：'+e.message);
+  }
 }
 
 
@@ -1434,6 +1444,11 @@ async function savePackStateToCloud(){
 
 
 // ── 分攤欠款顯示（待實作）──────────────────────────
+
+function loadNotifications(){
+  // TODO: 載入還款通知
+}
+
 function renderCloudDebts(){
   // TODO: 顯示家人間分攤欠款
 }
