@@ -1494,9 +1494,9 @@ function buildDaysMeta(numDays, startDate){
   }
   return meta;
 }
-// 初始化（行程載入後會重新 build）
-let DAYS_META = buildDaysMeta(scheduleData.length, tripStart);
-let weatherData = Array(scheduleData.length).fill(null).map(()=>({icon:'⏳',temp:'—'}));
+// 初始化：先給固定6天，行程從雲端載入後 rebuildDaysMeta() 會重算
+let DAYS_META = buildDaysMeta(6, tripStart);
+let weatherData = Array(6).fill(null).map(()=>({icon:'⏳',temp:'—'}));
 
 // 當 scheduleData 更新時重新建立 DAYS_META
 function rebuildDaysMeta(){
@@ -1738,8 +1738,8 @@ function renderScheduleNew(){
 // ════════════════════════════════════════════════════════
 //  後台行程編輯面板（大氣風版）
 // ════════════════════════════════════════════════════════
-let _adminPanelEl = null;
-let _adminPanelItemId = null;
+var _adminPanelEl = null;
+var _adminPanelItemId = null;
 
 function openAdminEditPanel(di, idx){
   const item = scheduleData[di]?.items[idx]; if(!item) return;
