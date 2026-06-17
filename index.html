@@ -1388,13 +1388,20 @@ async function loadPackCatsFromCloud(){
   try{
     const rows=await sbFetch('/rest/v1/trip_pack_cats?id=eq.'+TRIP_ID+'&select=data');
     if(rows && rows.length>0 && rows[0].data){
-      PACK_CATS = _migratePack(rows[0].data);
-      // 同步到 localStorage 備份
+      const raw = rows[0].data;
+      // 支援舊格式（物件）和新格式（陣列）
+      if(Array.isArray(raw)){
+        // 新格式：陣列，順序保證
+        PACK_CATS={};
+        raw.forEach(cat=>{ PACK_CATS[cat.name]=cat.items||[]; });
+      } else {
+        // 舊格式：物件，migrate
+        PACK_CATS = _migratePack(raw);
+      }
       localStorage.setItem('busanPackCats',JSON.stringify(PACK_CATS));
       renderPack();
-      console.log('✅ 打包分類已從雲端載入，分類：', Object.keys(PACK_CATS).join(', '));
+      console.log('✅ 打包分類載入，順序：', Object.keys(PACK_CATS).join(' > '));
     } else {
-      // 雲端沒有資料，推送本地
       await pushPackCatsToCloud();
     }
   } catch(e){
@@ -1404,13 +1411,15 @@ async function loadPackCatsFromCloud(){
 
 async function pushPackCatsToCloud(){
   try{
-    const result = await sbFetch('/rest/v1/trip_pack_cats',{
+    // 轉成陣列格式保序：[{name:'衣物', items:[...]}, ...]
+    const dataArr = Object.keys(PACK_CATS).map(name=>({name, items:PACK_CATS[name]}));
+    await sbFetch('/rest/v1/trip_pack_cats',{
       method:'POST',
       prefer:'resolution=merge-duplicates',
-      body:JSON.stringify({id:TRIP_ID,data:PACK_CATS,updated_at:new Date().toISOString()})
+      body:JSON.stringify({id:TRIP_ID, data:dataArr, updated_at:new Date().toISOString()})
     });
-    console.log('✅ 打包分類已推送到雲端', JSON.stringify(PACK_CATS).slice(0,100));
-    toast('✅ 打包分類已同步到雲端');
+    console.log('✅ 打包分類推送成功，順序：', dataArr.map(d=>d.name).join(' > '));
+    toast('✅ 打包分類已同步');
   } catch(e){
     console.error('打包分類推送失敗',e.message);
     toast('⚠️ 打包同步失敗：'+e.message);
@@ -1433,11 +1442,21 @@ async function loadPackStateFromCloud(){
 
 async function savePackStateToCloud(){
   try{
-    await sbFetch('/rest/v1/trip_pack',{
-      method:'POST',
-      prefer:'resolution=merge-duplicates',
-      body:JSON.stringify({trip_id:TRIP_ID,device_id:_deviceId,state:packState})
-    });
+    // 先查有沒有這筆記錄
+    const existing=await sbFetch('/rest/v1/trip_pack?trip_id=eq.'+TRIP_ID+'&device_id=eq.'+encodeURIComponent(_deviceId)+'&select=id');
+    if(existing && existing.length>0){
+      // 有就 PATCH 更新
+      await sbFetch('/rest/v1/trip_pack?trip_id=eq.'+TRIP_ID+'&device_id=eq.'+encodeURIComponent(_deviceId),{
+        method:'PATCH',
+        body:JSON.stringify({state:packState})
+      });
+    } else {
+      // 沒有就 POST 新增
+      await sbFetch('/rest/v1/trip_pack',{
+        method:'POST',
+        body:JSON.stringify({trip_id:TRIP_ID,device_id:_deviceId,state:packState})
+      });
+    }
   } catch(e){ console.warn('打包狀態儲存失敗',e.message); }
 }
 
@@ -3636,6 +3655,21 @@ function renderPack(){
         :''}
       </div>`;
     });
+    // 前台：顯示個人新增項目（packState 裡 _personal_cat_ 開頭的）
+    if(!isAdmin){
+      const personalPrefix='_personal_'+cat+'_';
+      Object.keys(packState).filter(k=>k.startsWith(personalPrefix)).forEach(pkey=>{
+        const pitem=packState[pkey];
+        const ptext=typeof pitem==='object'?pitem.t:String(pitem);
+        const pdone=typeof pitem==='object'?pitem.done:false;
+        if(pdone)done++;all++;
+        html+=`<div class="check-item ${pdone?'done':''}">
+          <div class="check-box" onclick="togglePersonalPack('${pkey}',this.parentElement)">${pdone?'✓':''}</div>
+          <div class="check-label" onclick="togglePersonalPack('${pkey}',this.parentElement)">${ptext} <span style="font-size:10px;color:#aaa">（我的）</span></div>
+          <span class="btn-danger" style="margin-left:auto;padding:2px 7px;font-size:10px" onclick="removePackItem('${cat}',null,'${pkey}');event.stopPropagation()">×</span>
+        </div>`;
+      });
+    }
     html+=`<div class="pack-add-row">
       <input placeholder="新增項目..." onkeydown="if(event.key==='Enter')addPackItem('${cat}',this)">
       <button class="btn-ghost" onclick="addPackItem('${cat}',this.previousElementSibling)" style="padding:5px 10px;font-size:11px">+</button>
@@ -3660,17 +3694,16 @@ function movePackItem(cat,i,dir){
   [packState[ki],packState[kj]]=[packState[kj],packState[ki]];
   savePersist();renderPack();
 }
-function movePackCat(ci,dir){
+async function movePackCat(ci,dir){
   const cats=Object.keys(PACK_CATS);
   const j=ci+dir;
   if(j<0||j>=cats.length)return;
-  // rebuild ordered object
   const entries=cats.map(k=>[k,PACK_CATS[k]]);
   [entries[ci],entries[j]]=[entries[j],entries[ci]];
   PACK_CATS={};
   entries.forEach(([k,v])=>PACK_CATS[k]=v);
-  savePersist();
-  pushPackCatsToCloud(); // 同步到雲端
+  // 直接推送，不存 localStorage（避免快取干擾）
+  await pushPackCatsToCloud();
   renderPack();
 }
 function renamePack(oldCat,newCat){
@@ -3710,18 +3743,50 @@ function togglePack(key,el){
   Object.keys(packState).forEach(k=>{if(!k.startsWith('linked_')){a++;if(packState[k])d++;}});
   document.getElementById('packProg').textContent=`${d}/${a} 已完成`;
 }
+
+function togglePersonalPack(pkey, el){
+  if(!packState[pkey]) packState[pkey]={t:'',done:false};
+  if(typeof packState[pkey]==='object'){
+    packState[pkey].done=!packState[pkey].done;
+  } else {
+    packState[pkey]={t:String(packState[pkey]),done:true};
+  }
+  el.classList.toggle('done');
+  el.querySelector('.check-box').textContent=packState[pkey].done?'✓':'';
+  savePackStateToCloud();
+}
+
 function addPackItem(cat,input){
   const v=input.value.trim();if(!v)return;
-  PACK_CATS[cat].push({t:v,a:isAdmin?1:0});
-  const i=PACK_CATS[cat].length-1;
-  packState[cat+'_'+i]=false;
+  if(isAdmin){
+    // 後台：加到 PACK_CATS（所有人共享），a=1
+    PACK_CATS[cat].push({t:v,a:1});
+    const i=PACK_CATS[cat].length-1;
+    packState[cat+'_'+i]=false;
+    savePersist();
+    pushPackCatsToCloud();
+  } else {
+    // 前台：只存在個人 packState，key 用 _personal_ 前綴
+    const personalKey='_personal_'+cat+'_'+Date.now();
+    packState[personalKey]={t:v,done:false};
+    savePackStateToCloud();
+  }
   input.value='';
-  savePersist();
-  if(isAdmin) pushPackCatsToCloud();
-  else savePackStateToCloud();
   renderPack();
 }
-function removePackItem(cat,i){PACK_CATS[cat].splice(i,1);savePersist();renderPack();}
+function removePackItem(cat,i,personalKey){
+  if(personalKey){
+    // 刪除個人項目（packState 裡的 _personal_ key）
+    delete packState[personalKey];
+    savePackStateToCloud();
+  } else if(isAdmin){
+    // 後台刪除公共項目
+    PACK_CATS[cat].splice(i,1);
+    savePersist();
+    pushPackCatsToCloud();
+  }
+  renderPack();
+}
 
 // ════════════════════════════════════════════════════════
 //  ADMIN
@@ -3893,7 +3958,13 @@ function showTab(id){
   // sos、pack 隱藏日期框；後台所有頁面（含 admin 設定頁、map、ledger）都顯示
   if(ds) ds.style.display=(id==='sos'||id==='pack')?'none':'flex';
   if(id==='sos') renderSOS();
-  if(id==='sched') _renderSched();
+  if(id==='sched'){
+    _renderSched();
+    // 前台每次切到行程頁，靜默從雲端更新
+    if(currentUser && !isAdmin){
+      loadScheduleFromCloud().catch(e=>console.warn('靜默更新失敗',e));
+    }
+  }
   if(id==='ledger'){ fetchKrwRate().then(()=>renderLedger()); renderLedger(); }
   if(id==='pack'){
     // 每次進打包頁重新從雲端抓最新分類
