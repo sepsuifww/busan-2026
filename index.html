@@ -1321,13 +1321,16 @@ async function loadScheduleFromCloud(){
 
 async function pushScheduleToCloud(){
   try{
-    await sbFetch('/rest/v1/trip_schedule',{
+    const res = await sbFetch('/rest/v1/trip_schedule',{
       method:'POST',
       prefer:'resolution=merge-duplicates',
       body:JSON.stringify({id:TRIP_ID,data:scheduleData,updated_at:new Date().toISOString()})
     });
     console.log('✅ 行程已推送到雲端');
-  } catch(e){ console.warn('行程推送失敗',e.message); }
+  } catch(e){
+    console.error('行程推送失敗',e.message);
+    toast('⚠️ 雲端同步失敗：'+e.message);
+  }
 }
 
 async function loadLedgerFromCloud(){
