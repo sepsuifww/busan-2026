@@ -989,10 +989,7 @@ img.grand-cover{position:absolute;inset:0;width:100%;height:100%;object-fit:cove
       style="width:100%;padding:12px;font-size:14px;font-weight:600;border-radius:12px">
       登入 →
     </button>
-    <button onclick="guestLogin()"
-      style="width:100%;padding:10px;font-size:13px;border-radius:12px;background:transparent;border:1px solid var(--glassb);color:var(--t2);cursor:pointer;font-family:inherit;margin-top:8px">
-      訪客瀏覽（不需帳號）
-    </button>
+
     <div style="border-top:1px solid var(--glassb);margin-top:14px;padding-top:12px">
       <div style="font-size:11px;color:var(--t3);margin-bottom:8px;text-align:center">第一次使用？建立帳號</div>
       <div style="display:flex;flex-direction:column;gap:8px">
@@ -4115,9 +4112,25 @@ loadTheme();
   });
   if(changed) localStorage.setItem('busanLedger',JSON.stringify(ledgerItems));
 })();
-renderDays();
-_renderSched();
-fetchWeather();
+// 頁面載入：判斷是否已有登入狀態
+(function initApp(){
+  renderDays();
+  fetchWeather();
+  if(currentUser){
+    // 已有登入狀態（localStorage 有記錄）→ 直接進入
+    const ol=document.getElementById('identityOverlay');
+    if(ol) ol.style.display='none';
+    const fw=document.getElementById('fabWrap');if(fw)fw.style.display='';
+    updateUserDisplay();
+    afterLogin();
+    initCloudSync();
+  } else {
+    // 未登入 → 顯示登入畫面，先渲染行程（背景可見）
+    _renderSched();
+    const ol=document.getElementById('identityOverlay');
+    if(ol) ol.style.display='flex';
+  }
+})();
 // 登入背景已嵌入 CSS
 </script>
 </body>
