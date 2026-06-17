@@ -1365,10 +1365,17 @@ async function loadPackCatsFromCloud(){
   try{
     const rows=await sbFetch('/rest/v1/trip_pack_cats?id=eq.'+TRIP_ID+'&select=data');
     if(rows && rows.length>0){
-      PACK_CATS=rows[0].data;
-      localStorage.setItem('busanPackCats',JSON.stringify(PACK_CATS));
-      renderPack();
-    } else { await pushPackCatsToCloud(); }
+      const cloudData = rows[0].data;
+      // 雲端資料優先（覆蓋本地）
+      if(cloudData && typeof cloudData === 'object'){
+        PACK_CATS = cloudData;
+        localStorage.setItem('busanPackCats',JSON.stringify(PACK_CATS));
+        renderPack();
+        console.log('✅ 打包分類已從雲端載入');
+      }
+    } else {
+      await pushPackCatsToCloud();
+    }
   } catch(e){ console.warn('雲端打包分類載入失敗',e.message); }
 }
 
@@ -3615,7 +3622,9 @@ function movePackCat(ci,dir){
   [entries[ci],entries[j]]=[entries[j],entries[ci]];
   PACK_CATS={};
   entries.forEach(([k,v])=>PACK_CATS[k]=v);
-  savePersist();renderPack();
+  savePersist();
+  pushPackCatsToCloud(); // 同步到雲端
+  renderPack();
 }
 function renamePack(oldCat,newCat){
   newCat=newCat.trim();if(!newCat||newCat===oldCat)return;
@@ -3856,20 +3865,27 @@ function markUnsaved(){
   document.getElementById('saveBar').classList.add('show');
 }
 async function confirmSave(){
-  if(_pendingSched) {
+  // 先存 localStorage（確保不丟失）
+  if(_pendingSched){
     localStorage.setItem('busanSched', JSON.stringify(_pendingSched));
-    scheduleData = JSON.parse(JSON.stringify(_pendingSched)); // commit
-    await pushScheduleToCloud();
+    scheduleData = JSON.parse(JSON.stringify(_pendingSched));
     _pendingSched = null;
   } else {
     localStorage.setItem('busanSched', JSON.stringify(scheduleData));
-    await pushScheduleToCloud();
   }
   _hasUnsaved = false;
   document.getElementById('saveBar').classList.remove('show');
-  const _n2e=document.getElementById('currentUserName2');if(_n2e)_n2e.textContent=currentUser?currentUser.name:'訪客';
-  savePersist(); // also save pack/persons/ledger
-  toast('✅ 已儲存並同步到雲端');
+  const _n2e=document.getElementById('currentUserName2');
+  if(_n2e)_n2e.textContent=currentUser?currentUser.name:'訪客';
+  savePersist();
+  // 推送雲端（獨立 try/catch，不影響主流程）
+  try{
+    await pushScheduleToCloud();
+    toast('✅ 已儲存並同步到雲端');
+  } catch(e){
+    console.warn('雲端同步失敗',e);
+    toast('✅ 已儲存（雲端同步失敗，請重新儲存）');
+  }
 }
 function discardChanges(){
   _pendingSched = null;
@@ -4132,6 +4148,32 @@ loadTheme();
   }
 })();
 // 登入背景已嵌入 CSS
+
+// ── 日期框滑鼠拖曳滾動（桌機版）──────────────────────
+(function initDayStripDrag(){
+  const strip = document.getElementById('dayStrip');
+  if(!strip) return;
+  let isDragging = false, startX = 0, scrollLeft = 0;
+  strip.addEventListener('mousedown', e=>{
+    isDragging = true;
+    startX = e.pageX - strip.offsetLeft;
+    scrollLeft = strip.scrollLeft;
+    strip.style.cursor = 'grabbing';
+    strip.style.userSelect = 'none';
+  });
+  document.addEventListener('mouseup', ()=>{
+    isDragging = false;
+    strip.style.cursor = '';
+    strip.style.userSelect = '';
+  });
+  document.addEventListener('mousemove', e=>{
+    if(!isDragging) return;
+    e.preventDefault();
+    const x = e.pageX - strip.offsetLeft;
+    const walk = (x - startX) * 1.2;
+    strip.scrollLeft = scrollLeft - walk;
+  });
+})();
 </script>
 </body>
 </html>
