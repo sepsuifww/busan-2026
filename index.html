@@ -1134,6 +1134,11 @@ function hashPw(pw){
 
 // 登入後統一初始化：選今日、渲染行程
 function afterLogin(){
+  // 登入後清除本地快取（避免不同帳號共用 localStorage）
+  localStorage.removeItem('busanLedger');
+  localStorage.removeItem('busanPack3');
+  ledgerItems=[];
+  packState={};
   // 登入後顯示 FAB
   const fw=document.getElementById('fabWrap');if(fw)fw.style.display='';
   // 計算今天是旅行第幾天
@@ -1432,7 +1437,8 @@ async function pushPackCatsToCloud(){
 // ════════════════════════════════════════════════════════
 async function loadPackStateFromCloud(){
   try{
-    const rows=await sbFetch('/rest/v1/trip_pack?trip_id=eq.'+TRIP_ID+'&device_id=eq.'+_deviceId+'&select=state');
+    const userId=currentUser?currentUser.id:'guest';
+    const rows=await sbFetch('/rest/v1/trip_pack?trip_id=eq.'+TRIP_ID+'&device_id=eq.'+encodeURIComponent(userId)+'&select=state');
     if(rows && rows.length>0){
       packState=rows[0].state||{};
       localStorage.setItem('busanPack3',JSON.stringify(packState));
@@ -1443,10 +1449,11 @@ async function loadPackStateFromCloud(){
 async function savePackStateToCloud(){
   try{
     // 先查有沒有這筆記錄
-    const existing=await sbFetch('/rest/v1/trip_pack?trip_id=eq.'+TRIP_ID+'&device_id=eq.'+encodeURIComponent(_deviceId)+'&select=id');
+    const userId=currentUser?currentUser.id:'guest';
+    const existing=await sbFetch('/rest/v1/trip_pack?trip_id=eq.'+TRIP_ID+'&device_id=eq.'+encodeURIComponent(userId)+'&select=id');
     if(existing && existing.length>0){
       // 有就 PATCH 更新
-      await sbFetch('/rest/v1/trip_pack?trip_id=eq.'+TRIP_ID+'&device_id=eq.'+encodeURIComponent(_deviceId),{
+      await sbFetch('/rest/v1/trip_pack?trip_id=eq.'+TRIP_ID+'&device_id=eq.'+encodeURIComponent(userId),{
         method:'PATCH',
         body:JSON.stringify({state:packState})
       });
@@ -1454,7 +1461,7 @@ async function savePackStateToCloud(){
       // 沒有就 POST 新增
       await sbFetch('/rest/v1/trip_pack',{
         method:'POST',
-        body:JSON.stringify({trip_id:TRIP_ID,device_id:_deviceId,state:packState})
+        body:JSON.stringify({trip_id:TRIP_ID,device_id:userId,state:packState})
       });
     }
   } catch(e){ console.warn('打包狀態儲存失敗',e.message); }
