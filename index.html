@@ -2436,7 +2436,15 @@ function saveTransitFields(id,di,idx){
   saveSched(); _renderSched(); toast('✅ 交通資訊已儲存');
 }
 function saveItemField(di,idx,field,val){
-  scheduleData[di].items[idx][field]=val; saveSched();
+  scheduleData[di].items[idx][field]=val;
+  // 時間更新後依時間排序
+  if(field==='time'){
+    scheduleData[di].items.sort((a,b)=>{
+      const ta=a.time||'99:99', tb=b.time||'99:99';
+      return ta.localeCompare(tb);
+    });
+  }
+  saveSched();
   if(['title','sub','time','price','cat','gUrl','nUrl'].includes(field)) _renderSched();
 }
 function saveTransitField(di,idx,field,val){
@@ -3863,7 +3871,14 @@ function showTab(id){
   if(id==='sos') renderSOS();
   if(id==='sched') _renderSched();
   if(id==='ledger'){ fetchKrwRate().then(()=>renderLedger()); renderLedger(); }
-  if(id==='pack')renderPack();
+  if(id==='pack'){
+    // 每次進打包頁重新從雲端抓最新分類
+    if(currentUser && !isAdmin){
+      loadPackCatsFromCloud().then(()=>renderPack());
+    } else {
+      renderPack();
+    }
+  }
   if(id==='map')renderMap();
 }
 
