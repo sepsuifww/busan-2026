@@ -1386,31 +1386,31 @@ async function deleteLedgerFromCloud(cloudId){
 
 async function loadPackCatsFromCloud(){
   try{
-    // 加 updated_at 確保拿最新，不被快取
-    const rows=await sbFetch('/rest/v1/trip_pack_cats?id=eq.'+TRIP_ID+'&select=data,updated_at&order=updated_at.desc');
-    if(rows && rows.length>0){
-      const cloudData = rows[0].data;
-      // 雲端資料優先（覆蓋本地）
-      if(cloudData && typeof cloudData === 'object'){
-        PACK_CATS = cloudData;
-        localStorage.setItem('busanPackCats',JSON.stringify(PACK_CATS));
-        renderPack();
-        console.log('✅ 打包分類已從雲端載入');
-      }
+    const rows=await sbFetch('/rest/v1/trip_pack_cats?id=eq.'+TRIP_ID+'&select=data');
+    if(rows && rows.length>0 && rows[0].data){
+      PACK_CATS = _migratePack(rows[0].data);
+      // 同步到 localStorage 備份
+      localStorage.setItem('busanPackCats',JSON.stringify(PACK_CATS));
+      renderPack();
+      console.log('✅ 打包分類已從雲端載入，分類：', Object.keys(PACK_CATS).join(', '));
     } else {
+      // 雲端沒有資料，推送本地
       await pushPackCatsToCloud();
     }
-  } catch(e){ console.warn('雲端打包分類載入失敗',e.message); }
+  } catch(e){
+    console.warn('雲端打包分類載入失敗',e.message);
+  }
 }
 
 async function pushPackCatsToCloud(){
   try{
-    await sbFetch('/rest/v1/trip_pack_cats',{
+    const result = await sbFetch('/rest/v1/trip_pack_cats',{
       method:'POST',
       prefer:'resolution=merge-duplicates',
       body:JSON.stringify({id:TRIP_ID,data:PACK_CATS,updated_at:new Date().toISOString()})
     });
-    console.log('✅ 打包分類已推送到雲端');
+    console.log('✅ 打包分類已推送到雲端', JSON.stringify(PACK_CATS).slice(0,100));
+    toast('✅ 打包分類已同步到雲端');
   } catch(e){
     console.error('打包分類推送失敗',e.message);
     toast('⚠️ 打包同步失敗：'+e.message);
