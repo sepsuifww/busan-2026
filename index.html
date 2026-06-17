@@ -952,6 +952,15 @@ img.grand-cover{position:absolute;inset:0;width:100%;height:100%;object-fit:cove
 
 
   <div class="admin-card">
+    <div class="admin-label">人員管理</div>
+    <div id="adminPersons" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px"></div>
+    <div class="admin-row">
+      <input class="admin-input" id="newPersonName" placeholder="新增人員" style="margin:0;flex:1">
+      <button class="btn-orange" onclick="addPerson()">新增</button>
+    </div>
+  </div>
+
+  <div class="admin-card">
     <div class="admin-label">天氣設定</div>
     <button class="btn-orange" onclick="fetchWeather()" style="width:100%;margin-bottom:8px">🌐 自動抓取釜山天氣</button>
     <div style="font-size:10px;color:var(--t3);margin-bottom:8px">Open-Meteo 免費 API，出發前16天內才有預報</div>
@@ -3710,7 +3719,8 @@ function renderAdmin(){
       <span style="cursor:pointer;color:var(--t3);font-size:13px" onclick="removeCat(${i})"> ×</span>
     </div>`).join('');
   // persons
-  document.getElementById('adminPersons').innerHTML=persons.map((p,i)=>`
+  const _ap=document.getElementById('adminPersons');
+  if(_ap) _ap.innerHTML=persons.map((p,i)=>`
     <div class="person-chip">${p}<span style="cursor:pointer;color:var(--t3);font-size:13px" onclick="removePerson(${i})"> ×</span></div>`).join('');
   renderWeatherEditor();
 }
