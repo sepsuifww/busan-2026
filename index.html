@@ -3084,11 +3084,14 @@ function addPersonFromForm(){
 function getSpotSpent(spotId){ return ledgerItems.filter(l=>l.spotId===spotId).reduce((s,l)=>s+l.amt,0); }
 
 function openLedgerFromSpot(spotId,title,di){
+  if(!currentUser || currentUser.isGuest){
+    toast('請先登入才能記帳');
+    return;
+  }
   const d=new Date(tripStart); d.setDate(d.getDate()+di);
   const dateVal=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  showTab('ledger');
-  setNav(document.querySelectorAll('.bni')[3]);
-  setTimeout(()=>openLedgerModal(spotId,title,dateVal,di),50);
+  // 不切換頁面，直接開記帳 modal（在景點詳情頁上浮現）
+  openLedgerModal(spotId,title,dateVal,di);
 }
 
 function cancelLedgerPrefill(){
@@ -3900,6 +3903,9 @@ async function adminDeleteMember(id,name){
 
 function enterAdmin(){
   isAdmin=true;document.body.classList.add('admin-mode');
+  // 後台不代表任何前台用戶，清除 currentUser 避免讀到用戶資料
+  currentUser=null;
+  localStorage.removeItem('busanCurrentUser');
   const _fw=document.getElementById('fabWrap');if(_fw)_fw.style.display='';
   const _ab=document.getElementById('adminBtn');if(_ab){_ab.textContent='🔓 退出後台';_ab.classList.add('on');}
   const _ub=document.getElementById('userBadge');if(_ub)_ub.style.display='none';
@@ -3972,7 +3978,15 @@ function showTab(id){
       loadScheduleFromCloud().catch(e=>console.warn('靜默更新失敗',e));
     }
   }
-  if(id==='ledger'){ fetchKrwRate().then(()=>renderLedger()); renderLedger(); }
+  if(id==='ledger'){
+    fetchKrwRate().then(()=>renderLedger());
+    // 每次進記帳頁從雲端重新載入（確保跨裝置同步）
+    if(currentUser && !currentUser.isGuest && !isAdmin){
+      loadLedgerFromCloud().catch(e=>console.warn('記帳載入失敗',e));
+    } else {
+      renderLedger();
+    }
+  }
   if(id==='pack'){
     // 每次進打包頁重新從雲端抓最新分類
     if(currentUser && !isAdmin){
