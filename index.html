@@ -511,12 +511,12 @@ button.btn-orange { background: linear-gradient(135deg,#9bcbe5,#387ea2) !importa
 .la-select option{background:#2a1200}
 /* Split toggle in form */
 .split-toggle-row{display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;user-select:none}
-.split-toggle-label{font-size:14.4px;color:var(--t2)}
-.split-toggle-sw{width:34px;height:20px;border-radius:10px;background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.2);position:relative;transition:background .2s;flex-shrink:0}
-.split-toggle-sw.on{background:var(--acc1);border-color:var(--acc1)}
+.split-toggle-label{font-size:14.4px;color:#4a7fa7;font-weight:500}
+.split-toggle-sw{width:34px;height:20px;border-radius:10px;background:#c8d8e4;border:1px solid #afc2cb;position:relative;transition:background .2s;flex-shrink:0}
+.split-toggle-sw.on{background:#4a7fa7;border-color:#4a7fa7}
 .split-toggle-sw::after{content:'';position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;transition:transform .2s}
 .split-toggle-sw.on::after{transform:translateX(14px)}
-.split-persons-panel{display:none;background:rgba(0,0,0,.15);border-radius:8px;padding:9px;margin-bottom:6px;border:1px solid rgba(255,180,60,.15)}
+.split-persons-panel{display:none;background:#f0f5f9;border-radius:8px;padding:9px;margin-bottom:6px;border:1px solid #c2d7e0}
 .split-persons-panel.open{display:block}
 .sp-chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:7px}
 .sp-chip{padding:4px 10px;border-radius:14px;font-size:13.2px;cursor:pointer;user-select:none;transition:all .15s;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.15);color:var(--t2)}
@@ -530,7 +530,7 @@ button.btn-orange { background: linear-gradient(135deg,#9bcbe5,#387ea2) !importa
 .receipt-thumb{width:44px;height:44px;border-radius:5px;object-fit:cover;margin-top:4px}
 
 /* LEDGER MODALS */
-.lmodal-bg{display:none;position:fixed;inset:0;z-index:180;background:rgba(0,0,0,.65);backdrop-filter:blur(6px);align-items:flex-end;justify-content:center;padding-bottom:80px}
+.lmodal-bg{display:none;position:fixed;inset:0;z-index:350;background:rgba(0,0,0,.65);backdrop-filter:blur(6px);align-items:flex-end;justify-content:center;padding-bottom:80px}
 .lmodal-bg.show{display:flex}
 .lmodal{background:#ffffff;border:1.5px solid #e8e8ec;border-radius:20px 20px 16px 16px;width:100%;max-width:480px;display:flex;flex-direction:column;max-height:82vh}
 .lmodal-hdr{display:flex;align-items:center;justify-content:space-between;padding:16px 18px 10px;border-bottom:1px solid #e8e8ec;flex-shrink:0}
@@ -548,11 +548,11 @@ button.btn-orange { background: linear-gradient(135deg,#9bcbe5,#387ea2) !importa
 .cash-init-label{font-size:13.2px;color:#5dcaa5;flex:1}
 .cash-init-input{width:90px;background:rgba(255,255,255,.07);border:1px solid rgba(29,158,117,.3);border-radius:6px;padding:4px 7px;font-size:14.4px;color:var(--t1);outline:none;font-family:inherit;text-align:right}
 .cash-remain{font-size:14.4px;font-weight:700;color:#5dcaa5;white-space:nowrap}
-.split-person-row{display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+.split-person-row{display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid #dce8ef}
 .split-person-row:last-child{border-bottom:none}
-.split-person-name{font-size:14.4px;color:var(--t1);flex:1;cursor:pointer;user-select:none}
-.split-person-name.sel{font-weight:600;color:var(--acc2)}
-.split-person-amt{width:85px;background:rgba(255,255,255,.08);border:1px solid rgba(255,180,60,.2);border-radius:6px;padding:4px 7px;font-size:14.4px;color:var(--t1);outline:none;font-family:inherit;text-align:right}
+.split-person-name{font-size:14.4px;color:#184e6c;flex:1;cursor:pointer;user-select:none}
+.split-person-name.sel{font-weight:700;color:#4a7fa7}
+.split-person-amt{width:85px;background:#fff;border:1px solid #afc2cb;border-radius:6px;padding:4px 7px;font-size:14.4px;color:#184e6c;outline:none;font-family:inherit;text-align:right}
 .split-recv-row{display:flex;align-items:center;gap:6px;padding:4px 0;cursor:pointer}
 .split-recv-ck{width:15px;height:15px;border-radius:4px;border:1.5px solid rgba(29,158,117,.4);display:flex;align-items:center;justify-content:center;font-size:10.8px;flex-shrink:0;transition:all .2s}
 .split-recv-row.recv .split-recv-ck{background:#1d9e75;border-color:#1d9e75}
@@ -3903,9 +3903,9 @@ async function adminDeleteMember(id,name){
 
 function enterAdmin(){
   isAdmin=true;document.body.classList.add('admin-mode');
-  // 後台不代表任何前台用戶，清除 currentUser 避免讀到用戶資料
+  // 後台模式：清記憶體的 currentUser，但不動 localStorage
+  // （保留 localStorage 讓前台用戶重整後還能自動登入）
   currentUser=null;
-  localStorage.removeItem('busanCurrentUser');
   const _fw=document.getElementById('fabWrap');if(_fw)_fw.style.display='';
   const _ab=document.getElementById('adminBtn');if(_ab){_ab.textContent='🔓 退出後台';_ab.classList.add('on');}
   const _ub=document.getElementById('userBadge');if(_ub)_ub.style.display='none';
@@ -3914,6 +3914,8 @@ function enterAdmin(){
   showTab('sched');setNav(document.querySelector('.bni'));
   // 後台同時初始化其他資料
   renderAdmin();renderLedger();renderMap();loadMembersList();
+  // 後台進入時從雲端載入最新打包分類
+  loadPackCatsFromCloud().catch(e=>console.warn('後台打包載入失敗',e));
   // 日期框：重新渲染確保有內容，並強制顯示
   renderDays();
   const _ds=document.getElementById('dayStrip');if(_ds)_ds.style.display='flex';
@@ -3988,12 +3990,8 @@ function showTab(id){
     }
   }
   if(id==='pack'){
-    // 每次進打包頁重新從雲端抓最新分類
-    if(currentUser && !isAdmin){
-      loadPackCatsFromCloud().then(()=>renderPack());
-    } else {
-      renderPack();
-    }
+    // 每次進打包頁都從雲端抓最新分類（前台後台都要）
+    loadPackCatsFromCloud().then(()=>renderPack()).catch(()=>renderPack());
   }
   if(id==='map')renderMap();
 }
@@ -4066,8 +4064,8 @@ function savePersist(){
   if(isAdmin){localStorage.setItem('busanLedgerTest',JSON.stringify(testLedgerItems));}else{localStorage.setItem('busanLedger',JSON.stringify(ledgerItems));}
   localStorage.setItem('busanPersons',JSON.stringify(persons));
   localStorage.setItem('busanPack3',JSON.stringify(packState));
-  // 後台不存 PACK_CATS 到 localStorage（雲端為主，避免快取衝突）
-  if(!isAdmin) localStorage.setItem('busanPackCats',JSON.stringify(PACK_CATS));
+  // 前後台都存 PACK_CATS 到 localStorage（作為離線備份）
+  localStorage.setItem('busanPackCats',JSON.stringify(PACK_CATS));
 }
 
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.classList.add('show');setTimeout(()=>t.classList.remove('show'),2600);}
