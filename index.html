@@ -1511,10 +1511,16 @@ function loadNotifications(){
 
 // Robin 記帳分攤給其他人時，寫入 trip_splits
 async function pushSplitsToCloud(ledgerCloudId, splits, itemName){
-  if(!ledgerCloudId || !splits || !splits.length) return;
+  console.log('🔍 pushSplitsToCloud 被呼叫', {ledgerCloudId, splits, itemName});
+  if(!ledgerCloudId){ console.warn('⚠️ 缺少 ledgerCloudId，無法推送分攤'); return; }
+  if(!splits || !splits.length){ console.warn('⚠️ splits 是空的，無法推送分攤'); return; }
   try{
     const fromIdMe = currentUser ? currentUser.id : 'unknown'; // 記帳者（收款方）
-    const rows = splits.filter(s=>s.id).map(s=>({
+    const validSplits = splits.filter(s=>s.id);
+    if(validSplits.length < splits.length){
+      console.warn('⚠️ 有分攤對象缺少 id（可能是舊資料格式）：', splits.filter(s=>!s.id));
+    }
+    const rows = validSplits.map(s=>({
       trip_id: TRIP_ID,
       ledger_id: ledgerCloudId,
       from_id: s.id,         // 欠錢的人（被分攤者）
@@ -1523,12 +1529,17 @@ async function pushSplitsToCloud(ledgerCloudId, splits, itemName){
       note: itemName,
       is_paid: false
     }));
-    if(!rows.length) return;
+    if(!rows.length){
+      console.warn('⚠️ 沒有有效的分攤對象可推送（全部缺少 id）');
+      toast('⚠️ 分攤未同步：找不到對方帳號 ID');
+      return;
+    }
     await sbFetch('/rest/v1/trip_splits',{
       method:'POST',
       body:JSON.stringify(rows)
     });
-    console.log('✅ 分攤已推送到雲端，共',rows.length,'筆');
+    console.log('✅ 分攤已推送到雲端，共',rows.length,'筆', rows);
+    toast('✅ 分攤已同步給 '+rows.length+' 人');
   } catch(e){
     console.error('分攤推送失敗',e.message);
     toast('⚠️ 分攤同步失敗：'+e.message);
