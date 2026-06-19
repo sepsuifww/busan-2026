@@ -1360,7 +1360,7 @@ async function pushScheduleToCloud(){
 async function loadLedgerFromCloud(){
   try{
     const ownerId=currentUser?currentUser.id:'unknown';
-    const rows=await sbFetch('/rest/v1/trip_ledger?trip_id=eq.'+TRIP_ID+'&owner_id=eq.'+ownerId+'&order=created_at.asc&select=id,item,created_by');
+    const rows=await sbFetch('/rest/v1/trip_ledger?trip_id=eq.'+TRIP_ID+'&owner_id=eq.'+ownerId+'&order=created_at.asc&select=id,item');
     if(rows){
       ledgerItems=rows.map(r=>Object.assign({},r.item,{_cloudId:r.id}));
       localStorage.setItem('busanLedger',JSON.stringify(ledgerItems));
@@ -1375,10 +1375,16 @@ async function pushLedgerItemToCloud(item){
     const rows=await sbFetch('/rest/v1/trip_ledger',{
       method:'POST',
       prefer:'return=representation',
-      body:JSON.stringify({trip_id:TRIP_ID,item:item,owner_id:currentUser?currentUser.id:'unknown',created_by:_deviceId})
+      body:JSON.stringify({trip_id:TRIP_ID,item:item,owner_id:currentUser?currentUser.id:'unknown'})
     });
-    if(rows && rows[0]){ item._cloudId=rows[0].id; }
-  } catch(e){ console.warn('記帳推送失敗',e.message); }
+    if(rows && rows[0]){
+      item._cloudId=rows[0].id;
+      console.log('✅ 記帳已存入雲端，id:',rows[0].id);
+    }
+  } catch(e){
+    console.error('記帳推送失敗',e.message);
+    toast('⚠️ 記帳雲端同步失敗：'+e.message);
+  }
 }
 
 async function deleteLedgerFromCloud(cloudId){
@@ -3358,17 +3364,25 @@ function addLedger(){
   const _lst=isAdmin?testLedgerItems:ledgerItems;
   const newItem={name,amt,type,cat,splits,day:dayLabel,date:dateLabel,dateVal,spotId:_prefillSpotId||null,receipt:window._pendingReceipt||null};
   _lst.push(newItem);
-  if(!isAdmin){
-    pushLedgerItemToCloud(newItem).then(()=>{
-      if(newItem._cloudId && newItem.splits && newItem.splits.length){
-        pushSplitsToCloud(newItem._cloudId, newItem.splits, newItem.name);
-      }
-    });
-  }
   window._pendingReceipt=null;
   _splitOn=false; _splitPersons.forEach(s=>{s.selected=false;s.amt=0;});
   closeLedgerModal();
-  savePersist();renderLedger();toast('已記帳 '+name);
+  savePersist();renderLedger();
+  if(isAdmin){
+    toast('✅ 測試記帳：'+name+'（不會同步雲端）');
+  } else {
+    toast('儲存中...');
+    pushLedgerItemToCloud(newItem).then(()=>{
+      if(newItem._cloudId){
+        toast('✅ 已記帳並同步：'+name);
+        if(newItem.splits && newItem.splits.length){
+          pushSplitsToCloud(newItem._cloudId, newItem.splits, newItem.name);
+        }
+      } else {
+        toast('⚠️ '+name+' 雲端同步失敗，請檢查網路');
+      }
+    });
+  }
 }
 
 function confirmDeleteLedger(i){
