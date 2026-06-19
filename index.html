@@ -1510,8 +1510,8 @@ function loadNotifications(){
 //
 
 // Robin 記帳分攤給其他人時，寫入 trip_splits
-async function pushSplitsToCloud(ledgerCloudId, splits, itemName){
-  console.log('🔍 pushSplitsToCloud 被呼叫', {ledgerCloudId, splits, itemName});
+async function pushSplitsToCloud(ledgerCloudId, splits, itemName, itemDate){
+  console.log('🔍 pushSplitsToCloud 被呼叫', {ledgerCloudId, splits, itemName, itemDate});
   if(!ledgerCloudId){ console.warn('⚠️ 缺少 ledgerCloudId，無法推送分攤'); return; }
   if(!splits || !splits.length){ console.warn('⚠️ splits 是空的，無法推送分攤'); return; }
   try{
@@ -1526,7 +1526,7 @@ async function pushSplitsToCloud(ledgerCloudId, splits, itemName){
       from_id: s.id,         // 欠錢的人（被分攤者）
       to_id: fromIdMe,        // 收錢的人（記帳者）
       amount: s.amt,
-      note: itemName,
+      note: itemDate ? (itemName+'｜'+itemDate) : itemName,
       is_paid: false
     }));
     if(!rows.length){
@@ -1544,6 +1544,14 @@ async function pushSplitsToCloud(ledgerCloudId, splits, itemName){
     console.error('分攤推送失敗',e.message);
     toast('⚠️ 分攤同步失敗：'+e.message);
   }
+}
+
+
+function _fmtSplitNote(note){
+  if(!note) return '';
+  const parts = note.split('｜');
+  if(parts.length===2) return `（${parts[0]} · ${parts[1]}）`;
+  return `（${note}）`;
 }
 
 let _myUnpaidAsDebtor=[];  // 我欠別人的（未還）
@@ -1597,8 +1605,19 @@ async function _convertReceiverConfirmedSplits(splits){
 }
 
 // Lu 主動還款：選擇方式並送出申請
+let _requestingSplits = new Set(); // 防止重複點擊
 async function requestSplitPayment(splitId, method){
+  // 防止重複點擊產生兩筆
+  if(_requestingSplits.has(splitId)){ return; }
+  _requestingSplits.add(splitId);
   try{
+    // 先確認這筆是否已經處理過（避免重整後狀態不同步又點一次）
+    const already = ledgerItems.find(l=>l._splitRequestId===splitId);
+    if(already){
+      toast('此筆已送出還款申請');
+      _requestingSplits.delete(splitId);
+      return;
+    }
     await sbFetch('/rest/v1/trip_splits?id=eq.'+splitId,{
       method:'PATCH',
       body:JSON.stringify({pay_status:'requested', pay_method:method, pay_by:'payer'})
@@ -1606,13 +1625,14 @@ async function requestSplitPayment(splitId, method){
     // Lu 立即把這筆算進自己的記帳（已認列支出）
     const split=_myUnpaidAsDebtor.find(s=>s.id===splitId);
     if(split){
+      const [splitName, splitDate] = (split.note||'').split('｜');
       const newItem={
-        name:'分攤還款 — '+(split.note||''),
+        name:'分攤還款 — '+(splitName||''),
         amt:split.amount,
         type:method,
         cat:'💴',
         splits:[],
-        day:'', date:'', dateVal:'',
+        day:'', date:splitDate||'', dateVal:'',
         spotId:null, receipt:null,
         isSplitSettlement:true,
         _splitRequestId:splitId
@@ -1625,11 +1645,15 @@ async function requestSplitPayment(splitId, method){
     renderLedger();
   } catch(e){
     toast('⚠️ 還款申請失敗：'+e.message);
+  } finally {
+    _requestingSplits.delete(splitId);
   }
 }
 
 // Robin 確認收到 Lu 的還款申請
 async function confirmSplitReceived(splitId){
+  if(_requestingSplits.has(splitId)) return;
+  _requestingSplits.add(splitId);
   try{
     await sbFetch('/rest/v1/trip_splits?id=eq.'+splitId,{
       method:'PATCH',
@@ -1639,11 +1663,15 @@ async function confirmSplitReceived(splitId){
     renderLedger();
   } catch(e){
     toast('⚠️ 確認失敗：'+e.message);
+  } finally {
+    _requestingSplits.delete(splitId);
   }
 }
 
 // Robin 主動標記「已收到還款」（方式B）
 async function markReceivedDirectly(splitId, method){
+  if(_requestingSplits.has(splitId)) return;
+  _requestingSplits.add(splitId);
   try{
     await sbFetch('/rest/v1/trip_splits?id=eq.'+splitId,{
       method:'PATCH',
@@ -1653,6 +1681,8 @@ async function markReceivedDirectly(splitId, method){
     renderLedger();
   } catch(e){
     toast('⚠️ 標記失敗：'+e.message);
+  } finally {
+    _requestingSplits.delete(splitId);
   }
 }
 
@@ -1676,7 +1706,7 @@ async function renderCloudDebts(){
     const isRequested=s.pay_status==='requested';
     html+=`<div style="background:#fff3e0;border:1px solid #ffcc80;border-radius:10px;padding:9px 12px;font-size:13px;color:#a85d00">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:${isRequested?'6px':'0'}">
-        <span>💸 你尚未還款 ${nameOf(s.to_id)} ₩${s.amount.toLocaleString()}${s.note?'（'+s.note+'）':''}</span>
+        <span>💸 你尚未還款 ${nameOf(s.to_id)} ₩${s.amount.toLocaleString()}${_fmtSplitNote(s.note)}</span>
       </div>
       ${isRequested
         ? `<div style="font-size:11px;color:#a85d00;opacity:.75">⏳ 已送出還款申請，等待 ${nameOf(s.to_id)} 確認</div>`
@@ -1692,7 +1722,7 @@ async function renderCloudDebts(){
     const isRequested=s.pay_status==='requested';
     html+=`<div style="background:#e8f5e9;border:1px solid #a5d6a7;border-radius:10px;padding:9px 12px;font-size:13px;color:#2e7d32">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <span>💰 ${nameOf(s.from_id)} 尚未還款你 ₩${s.amount.toLocaleString()}${s.note?'（'+s.note+'）':''}</span>
+        <span>💰 ${nameOf(s.from_id)} 尚未還款你 ₩${s.amount.toLocaleString()}${_fmtSplitNote(s.note)}</span>
       </div>
       ${isRequested
         ? `<div style="margin-top:6px">
@@ -3424,7 +3454,7 @@ async function renderLedger(){
   document.getElementById('lCash').textContent='₩'+cash.toLocaleString();
   const cashRemain=cashInitAmt-cash+cashRecv;
   document.getElementById('lCashSub').innerHTML=
-    (cashRecv>0?`<span style="color:#5dcaa5">分攤入帳 +₩${cashRecv.toLocaleString()}</span><br>`:'')+
+    (cashRecv>0?`<span style="color:var(--t2)">分攤入帳 +₩${cashRecv.toLocaleString()}</span><br>`:'')+
     (cashInitAmt>0
       ?`<span style="color:var(--t2)">剩 ₩${cashRemain.toLocaleString()}</span>`
       :`<span style="color:var(--t3)">點設定換錢金額</span>`);
@@ -3465,7 +3495,7 @@ async function renderLedger(){
         </div>
         <div style="text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px">
           <div class="lr-amt">₩${l.amt.toLocaleString()}</div>
-          <button class="btn-danger" style="font-size:10px;padding:2px 8px;border-radius:6px" onclick="confirmDeleteLedger(${realIdx});event.stopPropagation()">🗑 刪除</button>
+          <button class="btn-danger" style="font-size:10px;padding:2px 8px;border-radius:6px" onclick="event.stopPropagation();event.preventDefault();confirmDeleteLedger(${realIdx})" ontouchend="event.stopPropagation()">🗑 刪除</button>
         </div>
       </div>
       <div class="lr-split">
@@ -3477,7 +3507,9 @@ async function renderLedger(){
               </div>`).join('')}
               <div style="margin-top:4px;font-size:10px;color:var(--t3);opacity:.7">還款狀態請至記帳頁上方查看</div>
             </div>`
-          :``
+          : (l.isSplitSettlement
+            ?`<div style="font-size:11px;color:var(--t2)">這是一筆分攤還款：金額 ₩${l.amt.toLocaleString()}</div>`
+            :``)
         }
         ${hasReceipt?`<div style="margin-top:8px"><img src="${l.receipt}" class="receipt-thumb" onclick="openImgLightbox(this.src)" style="cursor:zoom-in" title="點擊放大"></div>`:''}
       </div>
@@ -3589,7 +3621,7 @@ function addLedger(){
       if(newItem._cloudId){
         toast('✅ 已記帳並同步：'+name);
         if(newItem.splits && newItem.splits.length){
-          pushSplitsToCloud(newItem._cloudId, newItem.splits, newItem.name);
+          pushSplitsToCloud(newItem._cloudId, newItem.splits, newItem.name, newItem.date);
         }
       } else {
         toast('⚠️ '+name+' 雲端同步失敗，請檢查網路');
