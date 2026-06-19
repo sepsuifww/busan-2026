@@ -1134,10 +1134,9 @@ function hashPw(pw){
 
 // 登入後統一初始化：選今日、渲染行程
 function afterLogin(){
-  // 登入後清除本地快取（避免不同帳號共用 localStorage）
-  localStorage.removeItem('busanLedger');
+  // 登入後清除打包狀態快取（避免不同帳號共用）
+  // 記帳不清除：每次進記帳頁都從雲端重抓，不需要清 localStorage
   localStorage.removeItem('busanPack3');
-  ledgerItems=[];
   packState={};
   // 登入後顯示 FAB
   const fw=document.getElementById('fabWrap');if(fw)fw.style.display='';
@@ -1594,7 +1593,8 @@ if(localStorage.getItem('busanDataVersion') !== DATA_VERSION){
   localStorage.removeItem('busanSched');
   localStorage.removeItem('busanPackCats');
   localStorage.removeItem('busanPack3');
-  localStorage.removeItem('busanLedger');
+  // busanLedger 不清除：記帳資料在 Supabase，不應因版本更新而消失
+  // localStorage.removeItem('busanLedger');
   localStorage.removeItem('busanTheme');
   localStorage.removeItem('busanDesign');
   localStorage.removeItem('busanCats');
