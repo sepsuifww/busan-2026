@@ -1479,9 +1479,226 @@ function loadNotifications(){
   // TODO: 載入還款通知
 }
 
-function renderCloudDebts(){
-  // TODO: 顯示家人間分攤欠款
+
+
+// ════════════════════════════════════════════════════════
+//  分攤系統 v2 — 完全雲端化（trip_splits 為唯一真相來源）
+// ════════════════════════════════════════════════════════
+//
+// trip_splits 欄位：
+//   id, trip_id, ledger_id, from_id, to_id, amount, note,
+//   is_paid, paid_at, created_at,
+//   pay_method（lu選的還款方式：cash/card）,
+//   pay_status（流程狀態：'' | 'requested'（lu已申請還款，等robin確認） | 'confirmed'（robin已確認））,
+//   pay_by（誰發起了還款動作：'payer' lu主動 | 'receiver' robin主動）
+//
+// 邏輯：
+//   from_id = 欠錢的人（被分攤者，如 Lu）
+//   to_id   = 收錢的人（記帳者，如 Robin）
+//
+//   方式A（Lu主動還）：
+//     1. Lu 選還款方式 → PATCH pay_status='requested', pay_method, pay_by='payer'
+//     2. Lu 統計立即 +amount（已認列支出）
+//     3. Robin 看到「Lu 已還款，待確認」→ 點確認 → PATCH is_paid=true, pay_status='confirmed'
+//     4. Robin 統計該方式 +amount（入帳）
+//
+//   方式B（Robin主動確認）：
+//     1. Robin 點「收到還款」→ 選方式 → PATCH is_paid=true, pay_status='confirmed', pay_by='receiver', pay_method
+//     2. Robin 統計立即 +amount
+//     3. Lu 端：偵測到 is_paid=true 且 pay_by='receiver' → 自動產生一筆正式記帳項目（金額=amount，type=pay_method）
+//        並標記這筆 split 為「已轉換」避免重複產生
+//
+
+// Robin 記帳分攤給其他人時，寫入 trip_splits
+async function pushSplitsToCloud(ledgerCloudId, splits, itemName){
+  if(!ledgerCloudId || !splits || !splits.length) return;
+  try{
+    const fromIdMe = currentUser ? currentUser.id : 'unknown'; // 記帳者（收款方）
+    const rows = splits.filter(s=>s.id).map(s=>({
+      trip_id: TRIP_ID,
+      ledger_id: ledgerCloudId,
+      from_id: s.id,         // 欠錢的人（被分攤者）
+      to_id: fromIdMe,        // 收錢的人（記帳者）
+      amount: s.amt,
+      note: itemName,
+      is_paid: false
+    }));
+    if(!rows.length) return;
+    await sbFetch('/rest/v1/trip_splits',{
+      method:'POST',
+      body:JSON.stringify(rows)
+    });
+    console.log('✅ 分攤已推送到雲端，共',rows.length,'筆');
+  } catch(e){
+    console.error('分攤推送失敗',e.message);
+    toast('⚠️ 分攤同步失敗：'+e.message);
+  }
 }
+
+let _myUnpaidAsDebtor=[];  // 我欠別人的（未還）
+let _myUnpaidAsCreditor=[]; // 別人欠我的（未還，含 requested 待確認）
+let _splitsConvertedKey='busanSplitsConverted'; // 記錄哪些 split 已轉成 Lu 的記帳項目
+
+async function loadMySplits(){
+  if(!currentUser || isAdmin || currentUser.isGuest) return;
+  try{
+    const myId=currentUser.id;
+    const asDebtor=await sbFetch('/rest/v1/trip_splits?trip_id=eq.'+TRIP_ID+'&from_id=eq.'+myId+'&is_paid=eq.false&select=*');
+    const asCreditor=await sbFetch('/rest/v1/trip_splits?trip_id=eq.'+TRIP_ID+'&to_id=eq.'+myId+'&is_paid=eq.false&select=*');
+    _myUnpaidAsDebtor=asDebtor||[];
+    _myUnpaidAsCreditor=asCreditor||[];
+
+    // 檢查有沒有「對方已確認收到(receiver發起)」但我這邊還沒轉成記帳項目的
+    const paidAsDebtor=await sbFetch('/rest/v1/trip_splits?trip_id=eq.'+TRIP_ID+'&from_id=eq.'+myId+'&is_paid=eq.true&pay_by=eq.receiver&select=*');
+    if(paidAsDebtor && paidAsDebtor.length){
+      await _convertReceiverConfirmedSplits(paidAsDebtor);
+    }
+  } catch(e){ console.warn('分攤載入失敗',e.message); }
+}
+
+// 把「對方主動確認收到」的分攤，轉成我這邊的正式記帳項目
+async function _convertReceiverConfirmedSplits(splits){
+  const converted=JSON.parse(localStorage.getItem(_splitsConvertedKey)||'[]');
+  let changed=false;
+  for(const s of splits){
+    if(converted.includes(s.id)) continue;
+    // 產生記帳項目
+    const newItem={
+      name:'分攤已還 — '+(s.note||''),
+      amt:s.amount,
+      type:s.pay_method||'cash',
+      cat:'💴',
+      splits:[],
+      day:'', date:'', dateVal:'',
+      spotId:null, receipt:null,
+      isSplitSettlement:true
+    };
+    ledgerItems.push(newItem);
+    await pushLedgerItemToCloud(newItem);
+    converted.push(s.id);
+    changed=true;
+  }
+  if(changed){
+    localStorage.setItem(_splitsConvertedKey, JSON.stringify(converted));
+    localStorage.setItem('busanLedger', JSON.stringify(ledgerItems));
+    toast('💰 已自動記錄分攤還款');
+  }
+}
+
+// Lu 主動還款：選擇方式並送出申請
+async function requestSplitPayment(splitId, method){
+  try{
+    await sbFetch('/rest/v1/trip_splits?id=eq.'+splitId,{
+      method:'PATCH',
+      body:JSON.stringify({pay_status:'requested', pay_method:method, pay_by:'payer'})
+    });
+    // Lu 立即把這筆算進自己的記帳（已認列支出）
+    const split=_myUnpaidAsDebtor.find(s=>s.id===splitId);
+    if(split){
+      const newItem={
+        name:'分攤還款 — '+(split.note||''),
+        amt:split.amount,
+        type:method,
+        cat:'💴',
+        splits:[],
+        day:'', date:'', dateVal:'',
+        spotId:null, receipt:null,
+        isSplitSettlement:true,
+        _splitRequestId:splitId
+      };
+      ledgerItems.push(newItem);
+      await pushLedgerItemToCloud(newItem);
+      localStorage.setItem('busanLedger', JSON.stringify(ledgerItems));
+    }
+    toast('✅ 已送出還款申請，等待對方確認');
+    renderLedger();
+  } catch(e){
+    toast('⚠️ 還款申請失敗：'+e.message);
+  }
+}
+
+// Robin 確認收到 Lu 的還款申請
+async function confirmSplitReceived(splitId){
+  try{
+    await sbFetch('/rest/v1/trip_splits?id=eq.'+splitId,{
+      method:'PATCH',
+      body:JSON.stringify({is_paid:true, paid_at:new Date().toISOString(), pay_status:'confirmed'})
+    });
+    toast('✅ 已確認收款');
+    renderLedger();
+  } catch(e){
+    toast('⚠️ 確認失敗：'+e.message);
+  }
+}
+
+// Robin 主動標記「已收到還款」（方式B）
+async function markReceivedDirectly(splitId, method){
+  try{
+    await sbFetch('/rest/v1/trip_splits?id=eq.'+splitId,{
+      method:'PATCH',
+      body:JSON.stringify({is_paid:true, paid_at:new Date().toISOString(), pay_status:'confirmed', pay_by:'receiver', pay_method:method})
+    });
+    toast('✅ 已標記收到還款');
+    renderLedger();
+  } catch(e){
+    toast('⚠️ 標記失敗：'+e.message);
+  }
+}
+
+// 渲染欠款提示框（debtBanner）
+async function renderCloudDebts(){
+  const banner=document.getElementById('debtBanner');
+  if(!banner) return;
+  if(!currentUser || isAdmin || currentUser.isGuest){ banner.innerHTML=''; return; }
+
+  await loadMySplits();
+
+  if(!_myUnpaidAsDebtor.length && !_myUnpaidAsCreditor.length){ banner.innerHTML=''; return; }
+
+  const members=await loadTripMembers();
+  const nameOf=id=>members.find(m=>m.id===id)?.name||id;
+
+  let html='<div style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px">';
+
+  // 我欠別人的（debtor視角）
+  _myUnpaidAsDebtor.forEach(s=>{
+    const isRequested=s.pay_status==='requested';
+    html+=`<div style="background:#fff3e0;border:1px solid #ffcc80;border-radius:10px;padding:9px 12px;font-size:13px;color:#a85d00">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:${isRequested?'6px':'0'}">
+        <span>💸 你欠 ${nameOf(s.to_id)} ₩${s.amount.toLocaleString()}${s.note?'（'+s.note+'）':''}</span>
+      </div>
+      ${isRequested
+        ? `<div style="font-size:11px;color:#a85d00;opacity:.75">⏳ 已送出還款申請，等待 ${nameOf(s.to_id)} 確認</div>`
+        : `<div style="display:flex;gap:6px;margin-top:6px">
+            <button onclick="requestSplitPayment('${s.id}','cash')" style="flex:1;padding:6px;border-radius:8px;border:1px solid #ffcc80;background:#fff;color:#a85d00;font-size:11px;cursor:pointer;font-family:inherit">💵 現金還款</button>
+            <button onclick="requestSplitPayment('${s.id}','card')" style="flex:1;padding:6px;border-radius:8px;border:1px solid #ffcc80;background:#fff;color:#a85d00;font-size:11px;cursor:pointer;font-family:inherit">💳 轉帳/刷卡</button>
+          </div>`}
+    </div>`;
+  });
+
+  // 別人欠我的（creditor視角）
+  _myUnpaidAsCreditor.forEach(s=>{
+    const isRequested=s.pay_status==='requested';
+    html+=`<div style="background:#e8f5e9;border:1px solid #a5d6a7;border-radius:10px;padding:9px 12px;font-size:13px;color:#2e7d32">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <span>💰 ${nameOf(s.from_id)} 欠你 ₩${s.amount.toLocaleString()}${s.note?'（'+s.note+'）':''}</span>
+      </div>
+      ${isRequested
+        ? `<div style="margin-top:6px">
+            <div style="font-size:11px;color:#2e7d32;margin-bottom:5px">${nameOf(s.from_id)} 已用 ${s.pay_method==='cash'?'現金':'轉帳/刷卡'} 還款，請確認</div>
+            <button onclick="confirmSplitReceived('${s.id}')" style="width:100%;padding:6px;border-radius:8px;border:none;background:#4a7fa7;color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">✅ 確認已收到</button>
+          </div>`
+        : `<div style="display:flex;gap:6px;margin-top:6px">
+            <button onclick="markReceivedDirectly('${s.id}','cash')" style="flex:1;padding:6px;border-radius:8px;border:1px solid #a5d6a7;background:#fff;color:#2e7d32;font-size:11px;cursor:pointer;font-family:inherit">收到現金</button>
+            <button onclick="markReceivedDirectly('${s.id}','card')" style="flex:1;padding:6px;border-radius:8px;border:1px solid #a5d6a7;background:#fff;color:#2e7d32;font-size:11px;cursor:pointer;font-family:inherit">收到轉帳</button>
+          </div>`}
+    </div>`;
+  });
+
+  html+='</div>';
+  banner.innerHTML=html;
+}
+
 
 async function initCloudSync(){
   const ss=document.getElementById('syncStatus');
@@ -3052,7 +3269,7 @@ function renderSplitPersonRows(){
     const existing=new Map(_splitPersons.map(s=>[s.name,s]));
     _splitPersons=members
       .filter(m=>m.name!==myName)
-      .map(m=>existing.get(m.name)||{name:m.name,selected:false,amt:0});
+      .map(m=>existing.get(m.name)||{id:m.id,name:m.name,selected:false,amt:0});
     // 直接在這裡渲染，el 在閉包內可用
     const totalAmt=parseInt(document.getElementById('laAmt')?.value)||0;
     const selCount=_splitPersons.filter(s=>s.selected).length||1;
@@ -3165,51 +3382,26 @@ function computeDebts(){
 
 // ── renderLedger ───────────────────────────────────────
 function renderLedger(){
-  renderCloudDebts();
+  renderCloudDebts(); // 新版雲端分攤系統，會自行更新 debtBanner
   loadNotifications();
   // Use test data in admin mode, real data in front mode
   const _items = isAdmin ? testLedgerItems : ledgerItems;
-  // ── stats across ALL items (no day filter for summary) ──
+  // ── stats across ALL items（自己記的帳，不含分攤項目重複）──
   let total=0,card=0,cash=0;
   _items.forEach(l=>{ total+=l.amt; if(l.type==='card') card+=l.amt; else cash+=l.amt; });
 
   document.getElementById('lTotal').textContent='₩'+total.toLocaleString();
   document.getElementById('lTotalTwd').textContent=`≈NT$${krwToTwd(total).toLocaleString()}`;
 
-  // Card: big=帳面總刷卡, sub=個人實際(扣掉所有分攤出去的金額，不管對方還沒還)
-  const cardSplitOut=_totalSplitOut('card');
-  const cardActual=card-cardSplitOut;
   document.getElementById('lCard').textContent='₩'+card.toLocaleString();
   document.getElementById('lCardSub').innerHTML=
-    `個人實際 ₩${cardActual.toLocaleString()}<br><span style="color:var(--t2)">≈NT$${krwToTwd(cardActual).toLocaleString()}</span>`;
+    `<span style="color:var(--t2)">≈NT$${krwToTwd(card).toLocaleString()}</span>`;
 
-  // Cash: big=帳面總現金支出
-  // 分攤入帳 = 所有帳款中，被分攤者以「現金」方式歸還的總額（不限原帳款類型）
-  const cashRecvByCash=_totalReceived(null,'cash');   // 任何帳款，以現金還款
-  // 個人實際現金支出 = 現金帳款 - 現金帳款分攤出去的(不管還沒還) + 0(刷卡分攤收現金不影響現金支出)
-  const cashSplitOut=_totalSplitOut('cash');
-  const cashActual=cash-cashSplitOut;
-  // 現金餘額 = 起始 - 個人現金支出 + 分攤收回現金
-  const rem=cashInitAmt-cashActual+cashRecvByCash;
   document.getElementById('lCash').textContent='₩'+cash.toLocaleString();
   document.getElementById('lCashSub').innerHTML=
-    `分攤入帳 <span style="color:var(--t2)">+₩${cashRecvByCash.toLocaleString()}</span><br>`+
     (cashInitAmt>0
-      ?`<span style="color:${rem<0?'#f09595':'var(--t2)'}">剩 ₩${rem.toLocaleString()}</span>`
+      ?`<span style="color:var(--t2)">剩 ₩${(cashInitAmt-cash).toLocaleString()}</span>`
       :`<span style="color:var(--t3)">點設定換錢金額</span>`);
-
-  // Debt banner
-  const debts=computeDebts();
-  const debtEl=document.getElementById('debtBanner');
-  if(debtEl){
-    const entries=Object.entries(debts).filter(([,v])=>v>0);
-    debtEl.innerHTML=entries.length
-      ? entries.map(([name,amt])=>`<div class="debt-row" onclick="openDebtModal('${name}')" style="cursor:pointer">
-          <span class="debt-name">👤 ${name} 尚未還款 <span style="font-size:9px;opacity:.6">點查看 ›</span></span>
-          <span class="debt-amt">₩${amt.toLocaleString()} <span style="font-size:10px;opacity:.7">≈NT$${krwToTwd(amt).toLocaleString()}</span></span>
-        </div>`).join('')
-      : '';
-  }
 
   // ── List: filter by day AND type ──
   // Build the date string for currentDay (yyyy-mm-dd) for accurate matching
@@ -3252,19 +3444,8 @@ function renderLedger(){
       </div>
       <div class="lr-split">
         ${hasSplit
-          ?`<div style="font-size:10px;color:var(--t3);margin-bottom:6px">總額 ₩${l.amt.toLocaleString()} · 點選勾選已收回</div>
-            ${l.splits.map((s,si)=>{
-              if(!s) return '';
-              const sAmt=s.amt||0;
-              const mb=s.received?`<span style="font-size:9px;padding:1px 5px;border-radius:5px;margin-left:4px;background:${s.receivedMethod==='cash'?'rgba(29,158,117,.2)':'rgba(55,138,221,.2)'};color:${s.receivedMethod==='cash'?'#5dcaa5':'#85b7eb'}">${s.receivedMethod==='cash'?'💵現金':'💳其他'}</span>`:'';
-              return `<div class="split-recv-row ${s.received?'recv':''}" onclick="toggleReceived(${realIdx},${si},this)">
-                <div class="split-recv-ck">${s.received?'✓':''}</div>
-                <div class="split-recv-name ${s.received?'recv':''}">${s.name||''}${mb}</div>
-                <div class="split-recv-amt">₩${sAmt.toLocaleString()} <span style="font-size:9px;opacity:.7">≈NT$${krwToTwd(sAmt).toLocaleString()}</span></div>
-                ${s.receivedDate?`<div class="split-recv-date">${s.receivedDate}</div>`:''}
-              </div>`;
-            }).join('')}`
-          :`<div style="font-size:11px;color:var(--t3)">此筆無分攤</div>`
+          ?`<div style="font-size:10px;color:var(--t3);margin-bottom:6px">已分攤給：${(l.splits||[]).map(s=>s?.name).filter(Boolean).join('、')}（還款狀態請至記帳頁上方查看）</div>`
+          :``
         }
         ${hasReceipt?`<div style="margin-top:8px"><img src="${l.receipt}" class="receipt-thumb" onclick="openImgLightbox(this.src)" style="cursor:zoom-in" title="點擊放大"></div>`:''}
       </div>
@@ -3358,7 +3539,7 @@ function addLedger(){
     const selected=_splitPersons.filter(s=>s.selected);
     if(selected.length>0){
       const autoEach=Math.round(amt/selected.length);
-      splits=selected.map(s=>({name:s.name,amt:s.amt>0?s.amt:autoEach,received:false,receivedDate:''}));
+      splits=selected.map(s=>({id:s.id,name:s.name,amt:s.amt>0?s.amt:autoEach,received:false,receivedDate:''}));
     }
   }
   const _lst=isAdmin?testLedgerItems:ledgerItems;
