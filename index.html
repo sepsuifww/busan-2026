@@ -1676,7 +1676,7 @@ async function renderCloudDebts(){
     const isRequested=s.pay_status==='requested';
     html+=`<div style="background:#fff3e0;border:1px solid #ffcc80;border-radius:10px;padding:9px 12px;font-size:13px;color:#a85d00">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:${isRequested?'6px':'0'}">
-        <span>💸 你欠 ${nameOf(s.to_id)} ₩${s.amount.toLocaleString()}${s.note?'（'+s.note+'）':''}</span>
+        <span>💸 你尚未還款 ${nameOf(s.to_id)} ₩${s.amount.toLocaleString()}${s.note?'（'+s.note+'）':''}</span>
       </div>
       ${isRequested
         ? `<div style="font-size:11px;color:#a85d00;opacity:.75">⏳ 已送出還款申請，等待 ${nameOf(s.to_id)} 確認</div>`
@@ -1692,7 +1692,7 @@ async function renderCloudDebts(){
     const isRequested=s.pay_status==='requested';
     html+=`<div style="background:#e8f5e9;border:1px solid #a5d6a7;border-radius:10px;padding:9px 12px;font-size:13px;color:#2e7d32">
       <div style="display:flex;justify-content:space-between;align-items:center">
-        <span>💰 ${nameOf(s.from_id)} 欠你 ₩${s.amount.toLocaleString()}${s.note?'（'+s.note+'）':''}</span>
+        <span>💰 ${nameOf(s.from_id)} 尚未還款你 ₩${s.amount.toLocaleString()}${s.note?'（'+s.note+'）':''}</span>
       </div>
       ${isRequested
         ? `<div style="margin-top:6px">
@@ -3392,7 +3392,7 @@ function computeDebts(){
 }
 
 // ── renderLedger ───────────────────────────────────────
-function renderLedger(){
+async function renderLedger(){
   renderCloudDebts(); // 新版雲端分攤系統，會自行更新 debtBanner
   loadNotifications();
   // Use test data in admin mode, real data in front mode
@@ -3404,14 +3404,29 @@ function renderLedger(){
   document.getElementById('lTotal').textContent='₩'+total.toLocaleString();
   document.getElementById('lTotalTwd').textContent=`≈NT$${krwToTwd(total).toLocaleString()}`;
 
+  // 分攤入帳統計（我是 to_id 且已確認收到的金額）
+  let cashRecv=0, cardRecv=0;
+  if(currentUser && !isAdmin){
+    try{
+      const recvRows=await sbFetch('/rest/v1/trip_splits?trip_id=eq.'+TRIP_ID+'&to_id=eq.'+currentUser.id+'&is_paid=eq.true&select=amount,pay_method');
+      (recvRows||[]).forEach(r=>{
+        if(r.pay_method==='cash') cashRecv+=r.amount;
+        else cardRecv+=r.amount;
+      });
+    } catch(e){ console.warn('分攤入帳統計失敗',e.message); }
+  }
+
   document.getElementById('lCard').textContent='₩'+card.toLocaleString();
   document.getElementById('lCardSub').innerHTML=
-    `<span style="color:var(--t2)">≈NT$${krwToTwd(card).toLocaleString()}</span>`;
+    `<span style="color:var(--t2)">≈NT$${krwToTwd(card).toLocaleString()}</span>`+
+    (cardRecv>0?`<br><span style="color:#5dcaa5">分攤入帳 +₩${cardRecv.toLocaleString()}</span>`:'');
 
   document.getElementById('lCash').textContent='₩'+cash.toLocaleString();
+  const cashRemain=cashInitAmt-cash+cashRecv;
   document.getElementById('lCashSub').innerHTML=
+    (cashRecv>0?`<span style="color:#5dcaa5">分攤入帳 +₩${cashRecv.toLocaleString()}</span><br>`:'')+
     (cashInitAmt>0
-      ?`<span style="color:var(--t2)">剩 ₩${(cashInitAmt-cash).toLocaleString()}</span>`
+      ?`<span style="color:var(--t2)">剩 ₩${cashRemain.toLocaleString()}</span>`
       :`<span style="color:var(--t3)">點設定換錢金額</span>`);
 
   // ── List: filter by day AND type ──
@@ -3455,7 +3470,13 @@ function renderLedger(){
       </div>
       <div class="lr-split">
         ${hasSplit
-          ?`<div style="font-size:10px;color:var(--t3);margin-bottom:6px">已分攤給：${(l.splits||[]).map(s=>s?.name).filter(Boolean).join('、')}（還款狀態請至記帳頁上方查看）</div>`
+          ?`<div style="font-size:11px;color:var(--t3);margin-bottom:6px">
+              <div style="margin-bottom:4px">分攤明細（總額 ₩${l.amt.toLocaleString()}）：</div>
+              ${(l.splits||[]).filter(Boolean).map(s=>`<div style="display:flex;justify-content:space-between;padding:3px 0;color:var(--t2)">
+                <span>${s.name}</span><span>₩${(s.amt||0).toLocaleString()}</span>
+              </div>`).join('')}
+              <div style="margin-top:4px;font-size:10px;color:var(--t3);opacity:.7">還款狀態請至記帳頁上方查看</div>
+            </div>`
           :``
         }
         ${hasReceipt?`<div style="margin-top:8px"><img src="${l.receipt}" class="receipt-thumb" onclick="openImgLightbox(this.src)" style="cursor:zoom-in" title="點擊放大"></div>`:''}
@@ -3615,7 +3636,21 @@ function openImgLightbox(src){
   lb.style.display='flex';
 }
 
-function removeLedger(i){const _l=isAdmin?testLedgerItems:ledgerItems;_l.splice(i,1);savePersist();renderLedger();}
+function removeLedger(i){
+  const _l=isAdmin?testLedgerItems:ledgerItems;
+  const item=_l[i];
+  _l.splice(i,1);
+  savePersist();renderLedger();
+  if(!isAdmin && item && item._cloudId){
+    deleteLedgerFromCloud(item._cloudId).then(()=>{
+      toast('✅ 已刪除並同步雲端');
+    }).catch(e=>{
+      toast('⚠️ 雲端刪除失敗：'+e.message);
+    });
+  } else if(isAdmin){
+    toast('✅ 測試記帳已刪除');
+  }
+}
 
 async function handleReceipt(e){
   const file=e.target.files[0];if(!file)return;toast('壓縮中...');
