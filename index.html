@@ -3473,7 +3473,7 @@ async function renderLedger(){
   document.getElementById('lCashSub').innerHTML=
     `<span style="color:var(--t2)">分攤入帳 +₩${cashRecv.toLocaleString()}</span><br>`+
     (cashInitAmt>0
-      ?`<span style="color:var(--t2)">剩 ₩${cashRemain.toLocaleString()}</span>`
+      ?`<span style="color:var(--t2)">現金剩</span> <span style="color:#4a7fa7">₩${cashRemain.toLocaleString()}</span>`
       :`<span style="color:var(--t3)">點設定換錢金額</span>`);
 
   // ── List: filter by day AND type ──
@@ -4342,7 +4342,7 @@ async function confirmSave(){
   _hasUnsaved = false;
   do{ const _s=document.getElementById('saveBar');if(_s)_s.classList.remove('show'); }while(0);
   const _n2e=document.getElementById('currentUserName2');
-  if(_n2e)_n2e.textContent=currentUser?currentUser.name:'訪客';
+  if(_n2e) _n2e.textContent = isAdmin ? '後台' : (currentUser?currentUser.name:'訪客');
   savePersist();
   // 推送雲端（獨立 try/catch，不影響主流程）
   try{
@@ -4357,7 +4357,9 @@ function discardChanges(){
   _pendingSched = null;
   _hasUnsaved = false;
   do{ const _s=document.getElementById('saveBar');if(_s)_s.classList.remove('show'); }while(0);
-  const _n2e=document.getElementById('currentUserName2');if(_n2e)_n2e.textContent=currentUser?currentUser.name:'訪客';
+  // 後台模式維持顯示「後台」，不因 currentUser=null 而誤判成訪客
+  const _n2e=document.getElementById('currentUserName2');
+  if(_n2e) _n2e.textContent = isAdmin ? '後台' : (currentUser?currentUser.name:'訪客');
   // reload from localStorage
   const saved = localStorage.getItem('busanSched');
   if(saved) scheduleData = JSON.parse(saved);
