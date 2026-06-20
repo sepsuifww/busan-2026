@@ -1138,6 +1138,8 @@ function afterLogin(){
   // 記帳不清除：每次進記帳頁都從雲端重抓，不需要清 localStorage
   localStorage.removeItem('busanPack3');
   packState={};
+  // 載入這個帳號自己的旅遊現金設定
+  cashInitAmt = parseInt(localStorage.getItem(_cashInitKey())||'0');
   // 登入後顯示 FAB
   const fw=document.getElementById('fabWrap');if(fw)fw.style.display='';
   // 計算今天是旅行第幾天
@@ -3190,9 +3192,13 @@ function updateTwdHint(){
 }
 
 // ── Cash init ──────────────────────────────────────────
-let cashInitAmt=parseInt(localStorage.getItem('busanCashInit')||'0');
+function _cashInitKey(){
+  return currentUser ? 'busanCashInit_'+currentUser.id : 'busanCashInit_guest';
+}
+let cashInitAmt=0; // 登入後由 afterLogin() 載入對應帳號的值
 
 function openCashModal(){
+  cashInitAmt = parseInt(localStorage.getItem(_cashInitKey())||'0');
   const el=document.getElementById('cashInitModal');
   if(el) el.value=cashInitAmt||'';
   _refreshCashModalStats();
@@ -3202,7 +3208,7 @@ function closeCashModal(){ document.getElementById('cashModalBg').classList.remo
 function saveCashModal(){
   const v=parseInt(document.getElementById('cashInitModal').value)||0;
   cashInitAmt=v;
-  localStorage.setItem('busanCashInit',v);
+  localStorage.setItem(_cashInitKey(),v);
   closeCashModal();
   renderLedger();
   toast('✓ 現金起始金額已儲存');
@@ -4223,6 +4229,8 @@ async function adminDeleteMember(id,name){
     await sbFetch('/rest/v1/trip_splits?trip_id=eq.'+TRIP_ID+'&to_id=eq.'+id, {method:'DELETE'});
     // 4. 最後刪除帳號本身
     await sbFetch('/rest/v1/trip_users?id=eq.'+id,{method:'DELETE'});
+    // 5. 清除本機可能殘留的旅遊現金設定（若同裝置曾用此帳號登入過）
+    localStorage.removeItem('busanCashInit_'+id);
     toast('✅ 已刪除 '+name+'（含所有相關資料）');
     loadMembersList();
   }catch(e){toast('刪除失敗：'+e.message);}
