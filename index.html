@@ -4211,10 +4211,19 @@ async function loadMembersList(){
 }
 
 async function adminDeleteMember(id,name){
-  if(!confirm('確定刪除成員「'+name+'」？'))return;
+  if(!confirm('確定刪除成員「'+name+'」？\n\n⚠️ 這會一併清除此帳號的所有記帳、打包、分攤資料，且無法復原。\n（如果之後要新增同名/同ID的新帳號，請務必先確認這裡已清乾淨）'))return;
   try{
+    toast('清除資料中...');
+    // 1. 刪除這個帳號的所有記帳
+    await sbFetch('/rest/v1/trip_ledger?trip_id=eq.'+TRIP_ID+'&owner_id=eq.'+id, {method:'DELETE'});
+    // 2. 刪除這個帳號的打包勾選狀態
+    await sbFetch('/rest/v1/trip_pack?trip_id=eq.'+TRIP_ID+'&device_id=eq.'+id, {method:'DELETE'});
+    // 3. 刪除這個帳號相關的所有分攤記錄（不論是欠人還是被欠）
+    await sbFetch('/rest/v1/trip_splits?trip_id=eq.'+TRIP_ID+'&from_id=eq.'+id, {method:'DELETE'});
+    await sbFetch('/rest/v1/trip_splits?trip_id=eq.'+TRIP_ID+'&to_id=eq.'+id, {method:'DELETE'});
+    // 4. 最後刪除帳號本身
     await sbFetch('/rest/v1/trip_users?id=eq.'+id,{method:'DELETE'});
-    toast('✅ 已刪除 '+name);
+    toast('✅ 已刪除 '+name+'（含所有相關資料）');
     loadMembersList();
   }catch(e){toast('刪除失敗：'+e.message);}
 }
