@@ -1358,14 +1358,24 @@ async function pushScheduleToCloud(){
 }
 
 async function loadLedgerFromCloud(){
+  // 後台模式或未登入時，不抓取任何個人記帳資料
+  if(isAdmin || !currentUser || currentUser.isGuest){
+    console.log('ℹ️ 後台模式或未登入，略過記帳雲端載入');
+    return;
+  }
+  const requestingUserId = currentUser.id; // 鎖定當下發起請求的身份
   try{
-    const ownerId=currentUser?currentUser.id:'unknown';
-    const rows=await sbFetch('/rest/v1/trip_ledger?trip_id=eq.'+TRIP_ID+'&owner_id=eq.'+ownerId+'&order=created_at.asc&select=id,item');
+    const rows=await sbFetch('/rest/v1/trip_ledger?trip_id=eq.'+TRIP_ID+'&owner_id=eq.'+requestingUserId+'&order=created_at.asc&select=id,item');
+    // 回應回來後，再次確認：身份是否已改變（切換帳號/進後台），若有改變就丟棄這次結果
+    if(isAdmin || !currentUser || currentUser.id!==requestingUserId){
+      console.warn('⚠️ 身份已切換，丟棄過期的記帳載入結果（原請求者：'+requestingUserId+'）');
+      return;
+    }
     if(rows){
       ledgerItems=rows.map(r=>Object.assign({},r.item,{_cloudId:r.id}));
       localStorage.setItem('busanLedger',JSON.stringify(ledgerItems));
       renderLedger();
-      console.log('✅ 記帳已從雲端載入',rows.length,'筆');
+      console.log('✅ 記帳已從雲端載入',rows.length,'筆（',requestingUserId,'）');
     }
   } catch(e){ console.warn('雲端記帳載入失敗',e.message); }
 }
@@ -1581,14 +1591,14 @@ async function _convertReceiverConfirmedSplits(splits){
   let changed=false;
   for(const s of splits){
     if(converted.includes(s.id)) continue;
-    // 產生記帳項目
+    const [splitName, splitDate] = (s.note||'').split('｜');
     const newItem={
-      name:'分攤已還 — '+(s.note||''),
+      name:'分攤已還 — '+(splitName||''),
       amt:s.amount,
       type:s.pay_method||'cash',
       cat:'💴',
       splits:[],
-      day:'', date:'', dateVal:'',
+      day:'', date:splitDate||'', dateVal:'',
       spotId:null, receipt:null,
       isSplitSettlement:true
     };
@@ -3265,6 +3275,13 @@ let _splitPersons=[];
 let _prefillSpotId=null;
 
 function openLedgerModal(spotId,title,dateVal,di){
+  // 確保 modal 在 DOM 最頂層，避免被 spot-detail 的 stacking context 影響
+  const _bg = document.getElementById('ledgerModalBg');
+  if(_bg && _bg.parentElement !== document.body){
+    document.body.appendChild(_bg);
+  } else if(_bg){
+    document.body.appendChild(_bg); // 移到 body 最後，確保最上層
+  }
   // reset form
   cancelLedgerPrefill();
   _splitOn=false;
@@ -3448,13 +3465,13 @@ async function renderLedger(){
 
   document.getElementById('lCard').textContent='₩'+card.toLocaleString();
   document.getElementById('lCardSub').innerHTML=
-    `<span style="color:var(--t2)">≈NT$${krwToTwd(card).toLocaleString()}</span>`+
-    (cardRecv>0?`<br><span style="color:#5dcaa5">分攤入帳 +₩${cardRecv.toLocaleString()}</span>`:'');
+    `<span style="color:var(--t2)">≈NT$${krwToTwd(card).toLocaleString()}</span><br>`+
+    `<span style="color:var(--t2)">分攤入帳 +₩${cardRecv.toLocaleString()}</span>`;
 
   document.getElementById('lCash').textContent='₩'+cash.toLocaleString();
   const cashRemain=cashInitAmt-cash+cashRecv;
   document.getElementById('lCashSub').innerHTML=
-    (cashRecv>0?`<span style="color:var(--t2)">分攤入帳 +₩${cashRecv.toLocaleString()}</span><br>`:'')+
+    `<span style="color:var(--t2)">分攤入帳 +₩${cashRecv.toLocaleString()}</span><br>`+
     (cashInitAmt>0
       ?`<span style="color:var(--t2)">剩 ₩${cashRemain.toLocaleString()}</span>`
       :`<span style="color:var(--t3)">點設定換錢金額</span>`);
@@ -3668,19 +3685,47 @@ function openImgLightbox(src){
   lb.style.display='flex';
 }
 
-function removeLedger(i){
+async function removeLedger(i){
   const _l=isAdmin?testLedgerItems:ledgerItems;
   const item=_l[i];
   _l.splice(i,1);
   savePersist();renderLedger();
-  if(!isAdmin && item && item._cloudId){
-    deleteLedgerFromCloud(item._cloudId).then(()=>{
-      toast('✅ 已刪除並同步雲端');
-    }).catch(e=>{
-      toast('⚠️ 雲端刪除失敗：'+e.message);
-    });
-  } else if(isAdmin){
+  if(isAdmin){
     toast('✅ 測試記帳已刪除');
+    return;
+  }
+  if(item && item._cloudId){
+    try{
+      await deleteLedgerFromCloud(item._cloudId);
+      // 處理連動的分攤：只刪除「尚未還款」的，已還款的保留
+      await _cleanupSplitsForDeletedLedger(item._cloudId);
+      toast('✅ 已刪除並同步雲端');
+    } catch(e){
+      toast('⚠️ 雲端刪除失敗：'+e.message);
+    }
+  }
+}
+
+// 刪除記帳時，連動處理 trip_splits：
+// - is_paid=false（尚未還款）→ 一併刪除，對方的提示框會消失
+// - is_paid=true（已還款）→ 保留，對方仍保有這筆支出記錄
+async function _cleanupSplitsForDeletedLedger(ledgerCloudId){
+  try{
+    const splits = await sbFetch('/rest/v1/trip_splits?trip_id=eq.'+TRIP_ID+'&ledger_id=eq.'+ledgerCloudId+'&select=id,is_paid');
+    if(!splits || !splits.length) return;
+    const toDelete = splits.filter(s=>!s.is_paid).map(s=>s.id);
+    if(toDelete.length){
+      for(const id of toDelete){
+        await sbFetch('/rest/v1/trip_splits?id=eq.'+id, {method:'DELETE'});
+      }
+      console.log('✅ 已清除',toDelete.length,'筆尚未還款的分攤');
+    }
+    const keptCount = splits.length - toDelete.length;
+    if(keptCount > 0){
+      console.log('ℹ️',keptCount,'筆已還款的分攤予以保留');
+    }
+  } catch(e){
+    console.warn('分攤連動清除失敗',e.message);
   }
 }
 
@@ -4179,6 +4224,8 @@ function enterAdmin(){
   // 後台模式：清記憶體的 currentUser，但不動 localStorage
   // （保留 localStorage 讓前台用戶重整後還能自動登入）
   currentUser=null;
+  // 確保不殘留任何前台用戶的記帳資料
+  ledgerItems=[];
   const _fw=document.getElementById('fabWrap');if(_fw)_fw.style.display='';
   const _ab=document.getElementById('adminBtn');if(_ab){_ab.textContent='🔓 退出後台';_ab.classList.add('on');}
   const _ub=document.getElementById('userBadge');if(_ub)_ub.style.display='none';
